@@ -2,12 +2,13 @@
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Response, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import BaseModel
 from supabase import create_client
 
+from auth import get_current_user
 from supabase_client import get_supabase_client
 from cases import router as cases_router
 
@@ -53,6 +54,15 @@ def login_user(credentials: LoginRequest, response: Response):
     except Exception:
         response.status_code = status.HTTP_401_UNAUTHORIZED
         return {"detail": "Authentication failed. Please check your email and password."}
+
+
+@app.get("/api/auth/me")
+def get_current_user_profile(current_user: dict = Depends(get_current_user)):
+    """
+    Validates the bearer token and returns authenticated user identity.
+    Used by frontend to verify stored sessions.
+    """
+    return {"user": current_user}
 
 
 # Include Case Management routes under /api/cases

@@ -39,3 +39,23 @@ export interface LoginResponse {
   token_type: string;
   user: AuthUser;
 }
+
+export interface EvidenceItem {
+  id: string;
+  case_id: string;
+  file_name: string;
+  storage_path: string;
+  file_size: number;
+  mime_type: string | null;
+  sha256_hash: string | null;
+  description: string | null;
+  uploaded_by: string;
+  processing_status: string;
+  uploaded_at: string;
+}
+
+export interface DownloadResponse {
+  download_url: string;
+  file_name: string;
+  expires_in: number;
+}

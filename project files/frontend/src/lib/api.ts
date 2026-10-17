@@ -1,4 +1,4 @@
-import { AuthUser, Case, CaseCreateInput, CaseUpdateInput, LoginResponse } from "@/types/case";
+import { AuthUser, Case, CaseCreateInput, CaseUpdateInput, DownloadResponse, EvidenceItem, LoginResponse } from "@/types/case";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 
@@ -152,3 +152,131 @@ export async function updateCase(
 
   return response.json();
 }
+
+export async function deleteCase(token: string, caseId: string): Promise<{ message: string; case_id?: string }> {
+  const response = await fetch(`${BACKEND_URL}/api/cases/${caseId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 409) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || "Cannot delete case with existing evidence or custody records.");
+    }
+    if (response.status === 403) {
+      throw new Error("Forbidden: You do not have permission to delete this case.");
+    }
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to delete case (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function fetchCaseEvidence(token: string, caseId: string): Promise<EvidenceItem[]> {
+  const response = await fetch(`${BACKEND_URL}/api/cases/${caseId}/evidence`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch evidence (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function uploadCaseEvidence(
+  token: string,
+  caseId: string,
+  file: File,
+  description?: string
+): Promise<EvidenceItem> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (description && description.trim()) {
+    formData.append("description", description.trim());
+  }
+
+  const response = await fetch(`${BACKEND_URL}/api/cases/${caseId}/evidence`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to upload evidence (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function getEvidenceDownloadUrl(
+  token: string,
+  caseId: string,
+  evidenceId: string
+): Promise<DownloadResponse> {
+  const response = await fetch(`${BACKEND_URL}/api/cases/${caseId}/evidence/${evidenceId}/download`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to generate download URL (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function deleteCaseEvidence(
+  token: string,
+  caseId: string,
+  evidenceId: string
+): Promise<{ message: string }> {
+  const response = await fetch(`${BACKEND_URL}/api/cases/${caseId}/evidence/${evidenceId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to delete evidence (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function verifySession(token: string): Promise<{ user: AuthUser }> {
+  const response = await fetch(`${BACKEND_URL}/api/auth/me`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error("Invalid or expired session");
+  }
+
+  return response.json();
+}
+

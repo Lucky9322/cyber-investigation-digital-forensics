@@ -1,21 +1,27 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Case, CaseCreateInput, CasePriority, CaseStatus, CaseUpdateInput, AuthUser } from "@/types/case";
+import { Case, CaseCreateInput, CasePriority, CaseStatus, CaseUpdateInput, AuthUser, EvidenceItem } from "@/types/case";
 import {
   clearSession,
   createCase,
+  deleteCase,
+  deleteCaseEvidence,
   fetchCaseById,
+  fetchCaseEvidence,
   fetchCases,
+  getEvidenceDownloadUrl,
   getSavedToken,
   getSavedUser,
   loginUser,
   saveToken,
   saveUser,
   updateCase,
+  uploadCaseEvidence,
+  verifySession,
 } from "@/lib/api";
 
-type Tab = "dashboard" | "cases" | "details";
+type Tab = "dashboard" | "cases" | "details" | "evidence";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -29,6 +35,17 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Evidence state
+  const [evidenceList, setEvidenceList] = useState<EvidenceItem[]>([]);
+  const [isLoadingEvidence, setIsLoadingEvidence] = useState<boolean>(false);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [evidenceSuccess, setEvidenceSuccess] = useState<string | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadDescription, setUploadDescription] = useState<string>("");
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [copiedHashId, setCopiedHashId] = useState<string | null>(null);
+
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>("All");
   const [priorityFilter, setPriorityFilter] = useState<string>("All");
@@ -38,6 +55,9 @@ export default function Home() {
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+  const [showDeleteCaseModal, setShowDeleteCaseModal] = useState<boolean>(false);
+  const [isDeletingCase, setIsDeletingCase] = useState<boolean>(false);
+  const [deleteCaseError, setDeleteCaseError] = useState<string | null>(null);
 
   // Create Form State
   const [createForm, setCreateForm] = useState<CaseCreateInput>({
@@ -59,13 +79,23 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState<boolean>(false);
 
-  // Load session from local storage on mount
+  // Load session from local storage and verify with backend on mount
   useEffect(() => {
     const savedToken = getSavedToken();
     const savedUser = getSavedUser();
     if (savedToken) {
       setToken(savedToken);
       setUser(savedUser);
+      verifySession(savedToken)
+        .then((res) => {
+          setUser(res.user);
+          saveUser(res.user);
+        })
+        .catch(() => {
+          clearSession();
+          setToken(null);
+          setUser(null);
+        });
     }
   }, []);
 
@@ -82,6 +112,9 @@ export default function Home() {
     try {
       const data = await fetchCases(currentToken);
       setCases(data);
+      if (data.length > 0 && !selectedCaseId) {
+        setSelectedCaseId(data[0].id);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load cases.";
       setError(msg);
@@ -100,10 +133,30 @@ export default function Home() {
     }
   }, [token]);
 
-  // Load case details when selectedCaseId changes
+  // Load evidence for a specific case
+  const loadEvidence = async (caseId: string, authToken?: string) => {
+    const currentToken = authToken || token;
+    if (!currentToken || !caseId) {
+      setEvidenceList([]);
+      return;
+    }
+    setIsLoadingEvidence(true);
+    setEvidenceError(null);
+    try {
+      const data = await fetchCaseEvidence(currentToken, caseId);
+      setEvidenceList(data);
+    } catch (err: unknown) {
+      setEvidenceError(err instanceof Error ? err.message : "Failed to load evidence.");
+    } finally {
+      setIsLoadingEvidence(false);
+    }
+  };
+
+  // Load case details and evidence when selectedCaseId changes
   useEffect(() => {
     if (!token || !selectedCaseId) {
       setSelectedCase(null);
+      setEvidenceList([]);
       return;
     }
 
@@ -121,6 +174,7 @@ export default function Home() {
     };
 
     loadDetails();
+    loadEvidence(selectedCaseId, token);
   }, [selectedCaseId, token]);
 
   // Handle Authentication
@@ -159,6 +213,7 @@ export default function Home() {
     setUser(null);
     setCases([]);
     setSelectedCase(null);
+    setEvidenceList([]);
     setActiveTab("dashboard");
   };
 
@@ -188,6 +243,7 @@ export default function Home() {
         priority: "Medium",
       });
       setSelectedCaseId(created.id);
+      setSelectedCase(created);
       setActiveTab("details");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create case.");
@@ -227,6 +283,135 @@ export default function Home() {
     setSelectedCaseId(targetCase.id);
     setSelectedCase(targetCase);
     setShowEditModal(true);
+  };
+
+  // Handle Archive Case (Sets status to Closed)
+  const handleArchiveCase = async () => {
+    if (!token || !selectedCaseId) return;
+    setIsDeletingCase(true);
+    setDeleteCaseError(null);
+    try {
+      const updated = await updateCase(token, selectedCaseId, { status: "Closed" });
+      setSelectedCase(updated);
+      setCases((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setShowDeleteCaseModal(false);
+    } catch (err: unknown) {
+      setDeleteCaseError(err instanceof Error ? err.message : "Failed to archive case.");
+    } finally {
+      setIsDeletingCase(false);
+    }
+  };
+
+  // Handle Permanent Delete Case
+  const handlePermanentDeleteCase = async () => {
+    if (!token || !selectedCaseId) return;
+    setIsDeletingCase(true);
+    setDeleteCaseError(null);
+    try {
+      await deleteCase(token, selectedCaseId);
+      const remainingCases = cases.filter((c) => c.id !== selectedCaseId);
+      setCases(remainingCases);
+      setSelectedCaseId(remainingCases.length > 0 ? remainingCases[0].id : null);
+      setSelectedCase(remainingCases.length > 0 ? remainingCases[0] : null);
+      setShowDeleteCaseModal(false);
+      setActiveTab("cases");
+    } catch (err: unknown) {
+      setDeleteCaseError(err instanceof Error ? err.message : "Failed to delete case.");
+    } finally {
+      setIsDeletingCase(false);
+    }
+  };
+
+  // Handle Evidence Upload
+  const handleUploadEvidence = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedCaseId || !uploadFile) return;
+
+    if (uploadFile.size > 10 * 1024 * 1024) {
+      setEvidenceError("File exceeds maximum allowed size of 10 MB.");
+      return;
+    }
+
+    setIsUploading(true);
+    setEvidenceError(null);
+    setEvidenceSuccess(null);
+
+    try {
+      const newEv = await uploadCaseEvidence(token, selectedCaseId, uploadFile, uploadDescription);
+      setEvidenceList((prev) => [newEv, ...prev]);
+      setEvidenceSuccess(`Evidence "${newEv.file_name}" uploaded successfully. SHA-256 hash verified.`);
+      setUploadFile(null);
+      setUploadDescription("");
+      const fileInput = document.getElementById("evidence-file-input") as HTMLInputElement;
+      if (fileInput) fileInput.value = "";
+    } catch (err: unknown) {
+      setEvidenceError(err instanceof Error ? err.message : "Evidence upload failed.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Handle Evidence Download
+  const handleDownloadEvidence = async (ev: EvidenceItem) => {
+    if (!token || !selectedCaseId) return;
+    setDownloadingId(ev.id);
+    setEvidenceError(null);
+    try {
+      const res = await getEvidenceDownloadUrl(token, selectedCaseId, ev.id);
+      const link = document.createElement("a");
+      link.href = res.download_url;
+      link.download = res.file_name;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: unknown) {
+      setEvidenceError(err instanceof Error ? err.message : "Failed to generate download URL.");
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  // Handle Evidence Delete
+  const handleDeleteEvidence = async (ev: EvidenceItem) => {
+    if (!token || !selectedCaseId) return;
+    if (
+      !confirm(
+        `Are you sure you want to delete evidence "${ev.file_name}"? This removes the storage object and records the deletion in audit history.`
+      )
+    ) {
+      return;
+    }
+
+    setIsLoadingEvidence(true);
+    setEvidenceError(null);
+    setEvidenceSuccess(null);
+    try {
+      await deleteCaseEvidence(token, selectedCaseId, ev.id);
+      setEvidenceList((prev) => prev.filter((item) => item.id !== ev.id));
+      setEvidenceSuccess(`Evidence "${ev.file_name}" deleted and recorded in audit log.`);
+    } catch (err: unknown) {
+      setEvidenceError(err instanceof Error ? err.message : "Failed to delete evidence.");
+    } finally {
+      setIsLoadingEvidence(false);
+    }
+  };
+
+  // Copy hash helper
+  const copyHash = (hash: string, id: string) => {
+    navigator.clipboard.writeText(hash);
+    setCopiedHashId(id);
+    setTimeout(() => setCopiedHashId(null), 2000);
+  };
+
+  // Format file size
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   // Filtered cases for the Cases tab
@@ -275,6 +460,195 @@ export default function Home() {
     }
   };
 
+  // Reusable Evidence Section Component
+  const renderEvidenceSection = () => (
+    <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-xs space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Case Evidence & Documents</h3>
+          <p className="text-xs text-gray-500">
+            Forensic artifacts stored in private <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700">case-evidence</code> bucket
+          </p>
+        </div>
+        <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-medium">
+          {evidenceList.length} Item{evidenceList.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      {/* Notifications */}
+      {evidenceSuccess && (
+        <div className="p-3 bg-green-50 border border-green-200 rounded text-xs text-green-800 flex justify-between items-center">
+          <span>{evidenceSuccess}</span>
+          <button onClick={() => setEvidenceSuccess(null)} className="text-green-600 hover:text-green-800 font-bold ml-2">
+            ✕
+          </button>
+        </div>
+      )}
+
+      {evidenceError && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-800 flex justify-between items-center">
+          <span>{evidenceError}</span>
+          <button onClick={() => setEvidenceError(null)} className="text-red-600 hover:text-red-800 font-bold ml-2">
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Upload Form */}
+      <form onSubmit={handleUploadEvidence} className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+        <h4 className="text-xs font-semibold text-gray-800 uppercase tracking-wide">Upload Forensic Evidence</h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div>
+            <label className="block text-gray-700 font-medium mb-1">
+              Select Document or Artifact <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="evidence-file-input"
+              type="file"
+              required
+              accept=".pdf,.txt,.csv,.eml,.docx,.doc"
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  setUploadFile(e.target.files[0]);
+                }
+              }}
+              className="w-full text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Allowed: PDF, TXT, CSV, EML, DOCX, DOC (Max: 10 MB)
+            </p>
+          </div>
+          <div>
+            <label className="block text-gray-700 font-medium mb-1">Source / Artifact Description</label>
+            <input
+              type="text"
+              placeholder="e.g. Memory dump extraction, phishing attachment log"
+              value={uploadDescription}
+              onChange={(e) => setUploadDescription(e.target.value)}
+              className="w-full px-3 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end pt-2 border-t border-gray-200">
+          <button
+            type="submit"
+            disabled={isUploading || !uploadFile}
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs font-medium flex items-center gap-1.5 cursor-pointer"
+          >
+            {isUploading ? (
+              <>
+                <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Hashing & Uploading...
+              </>
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                Upload Evidence
+              </>
+            )}
+          </button>
+        </div>
+      </form>
+
+      {/* Evidence Table */}
+      <div className="overflow-x-auto border border-gray-200 rounded-lg">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 uppercase font-medium">
+            <tr>
+              <th className="px-4 py-3">File Name</th>
+              <th className="px-4 py-3">Size</th>
+              <th className="px-4 py-3">Format</th>
+              <th className="px-4 py-3">SHA-256 Hash</th>
+              <th className="px-4 py-3">Uploaded</th>
+              <th className="px-4 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {isLoadingEvidence ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
+                  <div className="flex items-center justify-center gap-2">
+                    <svg className="w-4 h-4 animate-spin text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>Loading forensic evidence...</span>
+                  </div>
+                </td>
+              </tr>
+            ) : evidenceList.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                  No evidence uploaded for this case yet. Select an artifact using the form above.
+                </td>
+              </tr>
+            ) : (
+              evidenceList.map((ev) => (
+                <tr key={ev.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-gray-900">{ev.file_name}</div>
+                    {ev.description && <p className="text-[11px] text-gray-400 truncate max-w-xs">{ev.description}</p>}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 font-mono text-[11px]">
+                    {formatBytes(ev.file_size)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">
+                    <span className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-[11px] font-mono">
+                      {ev.mime_type || "document"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {ev.sha256_hash ? (
+                      <div className="flex items-center gap-1.5">
+                        <code className="text-[11px] text-gray-700 font-mono bg-gray-50 border border-gray-200 px-1 py-0.5 rounded truncate max-w-[150px]" title={ev.sha256_hash}>
+                          {ev.sha256_hash.slice(0, 10)}...{ev.sha256_hash.slice(-6)}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => copyHash(ev.sha256_hash!, ev.id)}
+                          className="text-[10px] text-blue-600 hover:text-blue-800 font-medium px-1.5 py-0.5 border border-gray-200 rounded bg-white hover:bg-gray-50 cursor-pointer"
+                          title="Copy Full SHA-256 Hash"
+                        >
+                          {copiedHashId === ev.id ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 italic">None</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 font-mono text-[11px]">
+                    {new Date(ev.uploaded_at).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-3 text-right space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadEvidence(ev)}
+                      disabled={downloadingId === ev.id}
+                      className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer text-xs"
+                      title="Download with temporary 60-second signed URL"
+                    >
+                      {downloadingId === ev.id ? "Generating..." : "Download"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteEvidence(ev)}
+                      className="text-red-600 hover:text-red-800 font-medium cursor-pointer text-xs"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900 font-sans antialiased overflow-hidden">
       {/* ==================================================================== */}
@@ -290,7 +664,7 @@ export default function Home() {
               </div>
               <div>
                 <h1 className="text-sm font-semibold tracking-tight text-gray-900">Cyber Forensics</h1>
-                <p className="text-xs text-gray-500">Module 1: Case Workspace</p>
+                <p className="text-xs text-gray-500">Module 1: Case & Evidence</p>
               </div>
             </div>
           </div>
@@ -332,21 +706,33 @@ export default function Home() {
               </span>
             </button>
 
-            <div className="pt-3 pb-1 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Forensic Modules
-            </div>
-
-            {/* Nonfunctional items marked clearly as Coming Soon */}
-            <div className="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-400 rounded-md cursor-not-allowed">
+            {/* Evidence Sidebar Item: NOW ACTIVE AND FUNCTIONAL */}
+            <button
+              onClick={() => {
+                if (cases.length > 0 && !selectedCaseId) {
+                  setSelectedCaseId(cases[0].id);
+                }
+                setActiveTab("evidence");
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                activeTab === "evidence"
+                  ? "bg-blue-50 text-blue-700 font-semibold"
+                  : "text-gray-700 hover:bg-gray-100"
+              }`}
+            >
               <span className="flex items-center gap-2.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
                 </svg>
                 Evidence
               </span>
-              <span className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded border border-gray-200">
-                Coming soon
+              <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                Active
               </span>
+            </button>
+
+            <div className="pt-3 pb-1 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              Forensic Modules
             </div>
 
             <div className="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-400 rounded-md cursor-not-allowed">
@@ -423,11 +809,17 @@ export default function Home() {
         <header className="h-14 bg-white border-b border-gray-200 px-6 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <span className="text-sm font-semibold text-gray-800 uppercase tracking-wide">
-              {activeTab === "dashboard" ? "Investigation Dashboard" : activeTab === "cases" ? "Case Management" : "Case Record"}
+              {activeTab === "dashboard"
+                ? "Investigation Dashboard"
+                : activeTab === "cases"
+                ? "Case Management"
+                : activeTab === "evidence"
+                ? "Evidence Management Hub"
+                : "Case Record"}
             </span>
-            {selectedCaseId && activeTab === "details" && (
+            {selectedCaseId && (activeTab === "details" || activeTab === "evidence") && (
               <span className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-0.5 rounded">
-                ID: {selectedCaseId.slice(0, 8)}...
+                Case ID: {selectedCaseId.slice(0, 8)}...
               </span>
             )}
           </div>
@@ -435,7 +827,10 @@ export default function Home() {
           <div className="flex items-center gap-3">
             {token && (
               <button
-                onClick={() => loadCases()}
+                onClick={() => {
+                  loadCases();
+                  if (selectedCaseId) loadEvidence(selectedCaseId);
+                }}
                 disabled={isLoading}
                 className="p-1.5 text-gray-600 hover:text-gray-900 border border-gray-200 rounded-md hover:bg-gray-50 text-xs flex items-center gap-1.5 cursor-pointer"
                 title="Refresh from Database"
@@ -473,7 +868,7 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <p className="text-xs text-amber-800">
-                <strong className="font-semibold">Authentication Required:</strong> All case operations require a verified Supabase session. Connect with your investigator credentials or access token to view live cases.
+                <strong className="font-semibold">Authentication Required:</strong> All case and evidence operations require a verified Supabase session. Connect with your investigator credentials to view live cases.
               </p>
             </div>
             <button
@@ -539,7 +934,7 @@ export default function Home() {
                   </div>
                   <button
                     onClick={() => setActiveTab("cases")}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
                   >
                     View All Cases →
                   </button>
@@ -580,7 +975,7 @@ export default function Home() {
                                   setSelectedCaseId(c.id);
                                   setActiveTab("details");
                                 }}
-                                className="text-blue-600 hover:text-blue-800 font-medium"
+                                className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
                               >
                                 View Details
                               </button>
@@ -676,7 +1071,7 @@ export default function Home() {
                                 setSelectedCaseId(c.id);
                                 setActiveTab("details");
                               }}
-                              className="font-medium text-blue-600 hover:text-blue-800 text-left"
+                              className="font-medium text-blue-600 hover:text-blue-800 text-left cursor-pointer"
                             >
                               {c.title}
                             </button>
@@ -696,13 +1091,13 @@ export default function Home() {
                                 setSelectedCaseId(c.id);
                                 setActiveTab("details");
                               }}
-                              className="text-gray-600 hover:text-gray-900 font-medium"
+                              className="text-gray-600 hover:text-gray-900 font-medium cursor-pointer"
                             >
                               Inspect
                             </button>
                             <button
                               onClick={() => openEditModal(c)}
-                              className="text-blue-600 hover:text-blue-800 font-medium"
+                              className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
                             >
                               Edit
                             </button>
@@ -718,7 +1113,7 @@ export default function Home() {
 
           {/* TAB 3: CASE DETAILS VIEW */}
           {activeTab === "details" && selectedCase && (
-            <div className="space-y-6 max-w-4xl">
+            <div className="space-y-6 max-w-5xl">
               {/* Back navigation */}
               <div>
                 <button
@@ -740,12 +1135,23 @@ export default function Home() {
                     </div>
                     <p className="text-xs text-gray-500 mt-1 font-mono">Case ID: {selectedCase.id}</p>
                   </div>
-                  <button
-                    onClick={() => openEditModal(selectedCase)}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium cursor-pointer"
-                  >
-                    Edit Case Metadata
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openEditModal(selectedCase)}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium cursor-pointer"
+                    >
+                      Edit Case
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDeleteCaseError(null);
+                        setShowDeleteCaseModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded text-xs font-medium cursor-pointer"
+                    >
+                      Delete / Archive
+                    </button>
+                  </div>
                 </div>
 
                 {/* Metadata Grid */}
@@ -783,31 +1189,63 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Associated Evidence Panel (Honest Coming Soon state) */}
-              <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-xs">
-                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900">Case Evidence & Custody</h3>
-                    <p className="text-xs text-gray-500">Digital forensic artifacts linked to this case</p>
-                  </div>
-                  <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded border border-gray-200">
-                    Phase 3: Coming soon
-                  </span>
+              {/* Case Evidence Management Section */}
+              {renderEvidenceSection()}
+            </div>
+          )}
+
+          {/* TAB 4: EVIDENCE MANAGEMENT HUB */}
+          {activeTab === "evidence" && (
+            <div className="space-y-6 max-w-5xl">
+              {/* Case Selector Bar */}
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Select Investigation Case:</label>
+                  <select
+                    value={selectedCaseId || ""}
+                    onChange={(e) => setSelectedCaseId(e.target.value)}
+                    className="text-xs border border-gray-300 rounded px-3 py-1.5 bg-white text-gray-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {cases.length === 0 ? (
+                      <option value="">No cases available</option>
+                    ) : (
+                      cases.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.title} ({c.status})
+                        </option>
+                      ))
+                    )}
+                  </select>
                 </div>
-                <div className="py-8 text-center text-xs text-gray-400">
-                  <svg className="w-8 h-8 text-gray-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                  Evidence upload and SHA-256 hash custody tracking will integrate with the private <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-600">case-evidence</code> bucket in the next phase.
-                </div>
+
+                {selectedCase && (
+                  <button
+                    onClick={() => setActiveTab("details")}
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 cursor-pointer"
+                  >
+                    View Complete Case Details →
+                  </button>
+                )}
               </div>
+
+              {selectedCaseId ? (
+                renderEvidenceSection()
+              ) : (
+                <div className="bg-white border border-gray-200 rounded-lg p-12 text-center text-gray-400">
+                  <svg className="w-10 h-10 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-sm font-medium text-gray-600">No Case Selected</p>
+                  <p className="text-xs text-gray-400 mt-1">Please create or select an investigation case to upload and inspect forensic evidence.</p>
+                </div>
+              )}
             </div>
           )}
         </div>
       </main>
 
       {/* ==================================================================== */}
-      {/* 3. MODALS (CREATE, EDIT, AUTH)                                       */}
+      {/* 3. MODALS (CREATE, EDIT, AUTH, DELETE/ARCHIVE)                       */}
       {/* ==================================================================== */}
 
       {/* CREATE CASE MODAL */}
@@ -816,7 +1254,7 @@ export default function Home() {
           <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full p-5 shadow-lg">
             <div className="flex justify-between items-center border-b border-gray-100 pb-3">
               <h3 className="text-sm font-bold text-gray-900">Create Investigation Case</h3>
-              <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600 text-xs font-bold">
+              <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600 text-xs font-bold cursor-pointer">
                 ✕
               </button>
             </div>
@@ -888,14 +1326,14 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-3 py-1.5 border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+                  className="px-3 py-1.5 border border-gray-300 rounded text-gray-700 hover:bg-gray-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium cursor-pointer"
                 >
                   {isLoading ? "Saving..." : "Create Case"}
                 </button>
@@ -911,7 +1349,7 @@ export default function Home() {
           <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full p-5 shadow-lg">
             <div className="flex justify-between items-center border-b border-gray-100 pb-3">
               <h3 className="text-sm font-bold text-gray-900">Edit Case Record</h3>
-              <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-gray-600 text-xs font-bold">
+              <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-gray-600 text-xs font-bold cursor-pointer">
                 ✕
               </button>
             </div>
@@ -978,19 +1416,80 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowEditModal(false)}
-                  className="px-3 py-1.5 border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+                  className="px-3 py-1.5 border border-gray-300 rounded text-gray-700 hover:bg-gray-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium cursor-pointer"
                 >
                   {isLoading ? "Saving..." : "Save Changes"}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE / ARCHIVE CASE MODAL */}
+      {showDeleteCaseModal && selectedCase && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full p-5 shadow-lg space-y-4">
+            <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+              <h3 className="text-sm font-bold text-gray-900">Delete or Archive Case</h3>
+              <button
+                onClick={() => setShowDeleteCaseModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs text-gray-600">
+              <p>
+                <strong>Forensic Integrity Notice:</strong> Digital forensics standards require that cases containing evidence, custody logs, or audit records must not be permanently deleted.
+              </p>
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded text-amber-800 space-y-1">
+                <p className="font-semibold">Recommended Safe Action:</p>
+                <p>
+                  <strong>Archive (Close):</strong> Sets the case status to &quot;Closed&quot; while retaining all evidence, custody history, and audit trails intact.
+                </p>
+              </div>
+            </div>
+
+            {deleteCaseError && (
+              <div className="p-2.5 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                {deleteCaseError}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row justify-end gap-2 pt-2 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setShowDeleteCaseModal(false)}
+                className="px-3 py-1.5 border border-gray-300 rounded text-gray-700 hover:bg-gray-50 text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingCase}
+                onClick={handleArchiveCase}
+                className="px-3.5 py-1.5 bg-gray-700 hover:bg-gray-800 text-white rounded text-xs font-medium cursor-pointer"
+              >
+                {isDeletingCase ? "Processing..." : "Archive Case (Close)"}
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingCase}
+                onClick={handlePermanentDeleteCase}
+                className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-medium cursor-pointer"
+              >
+                {isDeletingCase ? "Deleting..." : "Permanently Delete"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1001,7 +1500,7 @@ export default function Home() {
           <div className="bg-white rounded-lg border border-gray-200 max-w-sm w-full p-5 shadow-lg">
             <div className="flex justify-between items-center border-b border-gray-100 pb-3">
               <h3 className="text-sm font-bold text-gray-900">Investigator Authentication</h3>
-              <button onClick={() => setShowAuthModal(false)} className="text-gray-400 hover:text-gray-600 text-xs font-bold">
+              <button onClick={() => setShowAuthModal(false)} className="text-gray-400 hover:text-gray-600 text-xs font-bold cursor-pointer">
                 ✕
               </button>
             </div>
