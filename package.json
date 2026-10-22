@@ -1,0 +1,13 @@
+{
+  "name": "cyber-investigation-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cyber Investigation & Digital Forensics Platform",
+  "scripts": {
+    "dev": "npm --prefix \"project files/frontend\" run dev",
+    "dev:frontend": "npm --prefix \"project files/frontend\" run dev",
+    "build": "npm --prefix \"project files/frontend\" run build",
+    "start": "npm --prefix \"project files/frontend\" run start",
+    "lint": "npm --prefix \"project files/frontend\" run lint"
+  }
+}

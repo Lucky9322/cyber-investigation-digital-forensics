@@ -20,8 +20,9 @@ import {
   uploadCaseEvidence,
   verifySession,
 } from "@/lib/api";
+import { EntityGraphViewer } from "@/components/graph/EntityGraphViewer";
 
-type Tab = "dashboard" | "cases" | "details" | "evidence";
+type Tab = "dashboard" | "cases" | "details" | "evidence" | "link-analysis";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -735,6 +736,31 @@ export default function Home() {
               Forensic Modules
             </div>
 
+            {/* Module 7: Entity & Link Analysis */}
+            <button
+              onClick={() => {
+                if (cases.length > 0 && !selectedCaseId) {
+                  setSelectedCaseId(cases[0].id);
+                }
+                setActiveTab("link-analysis");
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                activeTab === "link-analysis"
+                  ? "bg-slate-900 text-cyan-300 font-semibold ring-1 ring-cyan-500/50"
+                  : "text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <svg className="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                </svg>
+                Entity & Link Analysis
+              </span>
+              <span className="text-[10px] bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-mono font-bold border border-cyan-800">
+                3D Active
+              </span>
+            </button>
+
             <div className="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-400 rounded-md cursor-not-allowed">
               <span className="flex items-center gap-2.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -815,9 +841,11 @@ export default function Home() {
                 ? "Case Management"
                 : activeTab === "evidence"
                 ? "Evidence Management Hub"
+                : activeTab === "link-analysis"
+                ? "Module 7: 3D Cyber Threat & Entity Link Analysis"
                 : "Case Record"}
             </span>
-            {selectedCaseId && (activeTab === "details" || activeTab === "evidence") && (
+            {selectedCaseId && (activeTab === "details" || activeTab === "evidence" || activeTab === "link-analysis") && (
               <span className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-0.5 rounded">
                 Case ID: {selectedCaseId.slice(0, 8)}...
               </span>
@@ -987,6 +1015,35 @@ export default function Home() {
                   </table>
                 </div>
               </div>
+
+              {/* Module 7 Quick Launch Card */}
+              <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border border-cyan-500/30 rounded-lg p-5 shadow-lg relative overflow-hidden">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                      <span className="text-[11px] font-mono uppercase font-bold text-cyan-400">
+                        Module 7 // Force-Directed Graph Engine
+                      </span>
+                    </div>
+                    <h3 className="text-base font-bold text-white tracking-tight">
+                      3D Interactive Cyber Threat & Entity Link Visualization
+                    </h3>
+                    <p className="text-xs text-slate-300 max-w-xl">
+                      Explore multidimensional force-directed graph representations of suspect networks, C2 beacons, fast-flux domains, CDR records, and evidence files with cryptographic SHA-256 integrity inspection.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab("link-analysis")}
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-md text-xs font-mono font-bold tracking-wide flex items-center gap-2 shadow-lg shadow-cyan-900/30 transition cursor-pointer shrink-0"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                    </svg>
+                    Launch 3D Neural View →
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1137,6 +1194,15 @@ export default function Home() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => setActiveTab("link-analysis")}
+                      className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-500/40 rounded text-xs font-medium flex items-center gap-1.5 shadow-sm cursor-pointer"
+                    >
+                      <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                      </svg>
+                      3D Entity Graph
+                    </button>
+                    <button
                       onClick={() => openEditModal(selectedCase)}
                       className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium cursor-pointer"
                     >
@@ -1239,6 +1305,17 @@ export default function Home() {
                   <p className="text-xs text-gray-400 mt-1">Please create or select an investigation case to upload and inspect forensic evidence.</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB 5: ENTITY & LINK ANALYSIS (3D FORENSICS) */}
+          {activeTab === "link-analysis" && (
+            <div className="space-y-4">
+              <EntityGraphViewer
+                initialCaseId={selectedCaseId || "case-dark-nexus"}
+                token={token}
+                onNavigateToCase={(caseId) => setSelectedCaseId(caseId)}
+              />
             </div>
           )}
         </div>
